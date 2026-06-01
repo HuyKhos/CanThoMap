@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bản Đồ Quản Lý Phân Phối Cần Thơ - Hậu Giang</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Leaflet CSS & JS (Đổi sang CDN Cloudflare để tránh lỗi chặn tải) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+    <style>
+        /* Tùy chỉnh CSS cho marker hiển thị task ngay trên bản đồ */
+        .custom-map-marker {
+            background: transparent;
+            border: none;
+        }
+        .marker-card {
+            background-color: rgba(255, 255, 255, 0.95);
+            border: 2px solid #3b82f6; /* Blue-500 */
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            width: max-content;
+            max-width: 200px;
+            padding: 8px;
+            position: relative;
+            transform: translate(-50%, -100%);
+            margin-top: -15px; /* Khoảng cách từ đỉnh điểm trên bản đồ */
+            pointer-events: auto; /* Cho phép click */
+            transition: all 0.2s ease;
+            cursor: pointer;
+            z-index: 1000;
+        }
+        .marker-card:hover {
+            transform: translate(-50%, -100%) scale(1.05);
+            z-index: 2000;
+            border-color: #2563eb; /* Blue-600 */
+        }
+        /* Mũi tên trỏ xuống của marker */
+        .marker-card::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 10px 10px 0;
+            border-style: solid;
+            border-color: #3b82f6 transparent transparent transparent;
+            display: block;
+            width: 0;
+        }
+        .marker-card:hover::after {
+            border-color: #2563eb transparent transparent transparent;
+        }
+        
+        .marker-title {
+            font-weight: 700;
+            color: #1e3a8a; /* Blue-900 */
+            font-size: 14px;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 4px;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .marker-tasks-list {
+            list-style-type: disc;
+            padding-left: 16px;
+            margin: 0;
+            font-size: 12px;
+            color: #374151; /* Gray-700 */
+        }
+        .marker-tasks-list li {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .marker-pin-point {
+            width: 12px;
+            height: 12px;
+            background-color: #ef4444; /* Red-500 */
+            border-radius: 50%;
+            border: 2px solid white;
+            position: absolute;
+            bottom: -5px;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: 0 0 4px rgba(0,0,0,0.4);
+        }
+
+        /* Ẩn control zoom mặc định nếu cần */
+        .leaflet-control-zoom {
+            border: none !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 m-0 p-0 absolute inset-0 overflow-hidden">
+    <div id="root" class="absolute inset-0"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Dữ liệu mẫu ban đầu (Cần Thơ & Hậu Giang)
+        const initialShops = [
+            {
+                id: '1',
+                name: 'Đại lý Ninh Kiều',
+                lat: 10.0335,
+                lng: 105.7820,
+                tasks: ['Kiểm tra tồn kho bia', 'Chụp ảnh kệ trưng bày chính', 'Thu công nợ tuần trước']
+            },
+            {
+                id: '2',
+                name: 'Tạp hóa Vị Thanh',
+                lat: 9.7820,
+                lng: 105.4650,
+                tasks: ['Phát tờ rơi khuyến mãi', 'Giới thiệu sản phẩm mới']
+            },
+            {
+                id: '3',
+                name: 'Cửa hàng Cái Răng',
+                lat: 9.9972,
+                lng: 105.7584,
+                tasks: ['Ký hợp đồng quý 3', 'Giao 10 thùng hàng']
+            },
+            {
+                id: '4',
+                name: 'Đại lý Ngã Bảy',
+                lat: 9.8130,
+                lng: 105.8115,
+                tasks: ['Kiểm tra tủ lạnh', 'Thu hồi vỏ chai']
+            }
+        ];
+
+        // --- Icons (SVG) ---
+        const IconMapPin = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>;
+        const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>;
+        const IconEdit = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>;
+        const IconTrash = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>;
+        const IconCheck = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+        const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>;
+        const IconTarget = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>;
+        const IconRoute = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>;
+        const IconUndo = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>;
+        const IconEye = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>;
+        const IconEyeOff = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>;
+
+        function App() {
+            // State
+            const [shops, setShops] = useState(() => {
+                const saved = localStorage.getItem('mekongShopsData');
+                if (saved) return JSON.parse(saved);
+                return initialShops;
+            });
+            const [editingShop, setEditingShop] = useState(null); // null if not editing/adding
+            const [isAddingNew, setIsAddingNew] = useState(false);
+            const [pickingLocation, setPickingLocation] = useState(false); // Mode to click on map for coords
+            const [shopToDelete, setShopToDelete] = useState(null);
+            const [alertMsg, setAlertMsg] = useState('');
+            
+            // --- Tuyến đường States ---
+            const [activeTab, setActiveTab] = useState('shops');
+            const [routes, setRoutes] = useState(() => {
+                const saved = localStorage.getItem('mekongRoutesData');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [isDrawingMode, setIsDrawingMode] = useState(false);
+            const [currentRoutePoints, setCurrentRoutePoints] = useState([]);
+            const [showRouteNameModal, setShowRouteNameModal] = useState(false);
+            const [newRouteName, setNewRouteName] = useState('');
+            const [routeToDelete, setRouteToDelete] = useState(null);
+            
+            const mapRef = useRef(null);
+            const mapInstance = useRef(null);
+            const markersLayerRef = useRef(null);
+            const routesLayerRef = useRef(null);
+
+            // Lưu dữ liệu khi thay đổi
+            useEffect(() => {
+                localStorage.setItem('mekongShopsData', JSON.stringify(shops));
+            }, [shops]);
+
+            useEffect(() => {
+                localStorage.setItem('mekongRoutesData', JSON.stringify(routes));
+            }, [routes]);
+
+            // Khởi tạo bản đồ
+            useEffect(() => {
+                if (!mapRef.current || mapInstance.current) return;
+                
+                // Đảm bảo thư viện đã được tải xong
+                if (typeof L === 'undefined') {
+                    console.error("Không thể tải thư viện Bản đồ Leaflet.");
+                    return;
+                }
+
+                try {
+                    // Tọa độ trung tâm: Nằm giữa Cần Thơ và Hậu Giang
+                    const map = L.map(mapRef.current, {
+                        zoomControl: true
+                    }).setView([9.92, 105.65], 10);
+                    
+                    mapInstance.current = map;
+                    
+                    // Sử dụng URL tile không có subdomain để tránh bị chặn và ổn định hơn
+                    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; OpenStreetMap contributors',
+                        maxZoom: 18,
+                    }).addTo(map);
+
+                    // Layer group chứa các markers
+                    markersLayerRef.current = L.layerGroup().addTo(map);
+
+                    // Layer group chứa tuyến đường
+                    routesLayerRef.current = L.layerGroup().addTo(map);
+
+                    // Sự kiện click trên bản đồ
+                    map.on('click', (e) => {
+                        // Cần dùng custom event dispatcher hoặc ref để lấy state mới nhất
+                        window.dispatchEvent(new CustomEvent('mapClicked', { detail: e.latlng }));
+                    });
+
+                    // Ép bản đồ cập nhật lại kích thước sau khi render xong giao diện
+                    setTimeout(() => {
+                        if (mapInstance.current) {
+                            mapInstance.current.invalidateSize();
+                        }
+                    }, 500);
+
+                    // Khắc phục triệt để lỗi xám bản đồ bằng ResizeObserver
+                    if (window.ResizeObserver) {
+                        const resizeObserver = new ResizeObserver(() => {
+                            if (mapInstance.current) {
+                                mapInstance.current.invalidateSize();
+                            }
+                        });
+                        resizeObserver.observe(mapRef.current);
+
+                        return () => {
+                            resizeObserver.disconnect();
+                            if (mapInstance.current) {
+                                mapInstance.current.remove();
+                                mapInstance.current = null;
+                            }
+                        };
+                    }
+                } catch (error) {
+                    console.error("Lỗi khởi tạo bản đồ:", error);
+                }
+
+                return () => {
+                    if (mapInstance.current) {
+                        mapInstance.current.remove();
+                        mapInstance.current = null;
+                    }
+                };
+            }, []);
+
+            // Lắng nghe sự kiện click bản đồ bằng Event Listener để xử lý state an toàn
+            useEffect(() => {
+                const handleMapClick = (e) => {
+                    const latlng = e.detail;
+                    if (pickingLocation && editingShop) {
+                        setEditingShop(prev => ({
+                            ...prev,
+                            lat: parseFloat(latlng.lat.toFixed(5)),
+                            lng: parseFloat(latlng.lng.toFixed(5))
+                        }));
+                        setPickingLocation(false);
+                    } else if (isDrawingMode) {
+                        setCurrentRoutePoints(prev => [...prev, [latlng.lat, latlng.lng]]);
+                    }
+                };
+                window.addEventListener('mapClicked', handleMapClick);
+                return () => window.removeEventListener('mapClicked', handleMapClick);
+            }, [pickingLocation, editingShop, isDrawingMode]);
+
+            // Render lại markers khi dữ liệu thay đổi
+            useEffect(() => {
+                if (!mapInstance.current || !markersLayerRef.current) return;
+
+                const layerGroup = markersLayerRef.current;
+                layerGroup.clearLayers(); // Xóa markers cũ
+
+                shops.forEach(shop => {
+                    if (!shop.lat || !shop.lng) return;
+
+                    // Tạo HTML cho Marker hiển thị trực tiếp task
+                    const tasksHtml = shop.tasks.length > 0 
+                        ? `<ul class="marker-tasks-list">${shop.tasks.map(t => `<li>${t}</li>`).join('')}</ul>`
+                        : `<span class="text-xs text-gray-400 italic block mt-1">Chưa có công việc</span>`;
+
+                    const htmlContent = `
+                        <div class="marker-card">
+                            <div class="marker-title">${shop.name}</div>
+                            ${tasksHtml}
+                        </div>
+                        <div class="marker-pin-point"></div>
+                    `;
+
+                    const icon = L.divIcon({
+                        className: 'custom-map-marker',
+                        html: htmlContent,
+                        iconSize: [0, 0], // Kích thước tự do
+                        iconAnchor: [0, 0] // Điểm neo gốc
+                    });
+
+                    const marker = L.marker([shop.lat, shop.lng], { icon: icon });
+                    
+                    // Thêm sự kiện click vào marker để chọn shop
+                    marker.on('click', () => {
+                        handleEditShop(shop);
+                        // Center map to marker when clicked
+                        mapInstance.current.setView([shop.lat, shop.lng], mapInstance.current.getZoom(), { animate: true });
+                    });
+
+                    layerGroup.addLayer(marker);
+                });
+            }, [shops]);
+
+            // Render lại tuyến đường khi dữ liệu thay đổi
+            useEffect(() => {
+                if (!mapInstance.current || !routesLayerRef.current) return;
+
+                const layerGroup = routesLayerRef.current;
+                layerGroup.clearLayers();
+
+                routes.forEach(route => {
+                    // Chỉ vẽ lên bản đồ nếu tuyến đường không bị ẩn
+                    if (route.visible !== false) {
+                        const polyline = L.polyline(route.points, { color: '#4f46e5', weight: 4, opacity: 0.8 }).addTo(layerGroup);
+                        polyline.bindTooltip(route.name, { sticky: true, className: 'font-bold text-indigo-900' });
+                    }
+                });
+
+                if (currentRoutePoints.length > 0) {
+                    L.polyline(currentRoutePoints, { color: '#ef4444', weight: 4, dashArray: '5, 10' }).addTo(layerGroup);
+                    currentRoutePoints.forEach(point => {
+                        L.circleMarker(point, { radius: 5, color: '#ef4444', fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(layerGroup);
+                    });
+                }
+            }, [routes, currentRoutePoints]);
+
+            // --- Handlers ---
+            const handleAddClick = () => {
+                setIsAddingNew(true);
+                setEditingShop({
+                    id: Date.now().toString(),
+                    name: '',
+                    lat: 10.0335, // Default Cần Thơ
+                    lng: 105.7820,
+                    tasks: ['']
+                });
+                setPickingLocation(false);
+            };
+
+            const handleEditShop = (shop) => {
+                setIsAddingNew(false);
+                setEditingShop({ ...shop });
+                setPickingLocation(false);
+                // Center map
+                if (mapInstance.current && shop.lat && shop.lng) {
+                     mapInstance.current.flyTo([shop.lat, shop.lng], 13, { duration: 0.5 });
+                }
+            };
+
+            const handleDeleteShop = (id, e) => {
+                e.stopPropagation(); // Ngăn trigger event chọn shop
+                setShopToDelete(id);
+            };
+
+            const confirmDelete = () => {
+                if (shopToDelete) {
+                    setShops(prev => prev.filter(s => s.id !== shopToDelete));
+                    if (editingShop?.id === shopToDelete) setEditingShop(null);
+                    setShopToDelete(null);
+                }
+            };
+
+            const handleSaveShop = () => {
+                if (!editingShop.name.trim()) {
+                    setAlertMsg('Vui lòng nhập tên cửa hàng');
+                    return;
+                }
+                
+                // Lọc bỏ các task rỗng
+                const cleanedTasks = editingShop.tasks.filter(t => t.trim() !== '');
+                const shopToSave = { ...editingShop, tasks: cleanedTasks };
+
+                if (isAddingNew) {
+                    setShops([...shops, shopToSave]);
+                } else {
+                    setShops(shops.map(s => s.id === shopToSave.id ? shopToSave : s));
+                }
+                
+                setEditingShop(null);
+                setPickingLocation(false);
+            };
+
+            const handleCancelEdit = () => {
+                setEditingShop(null);
+                setPickingLocation(false);
+            };
+
+            // Form Handlers
+            const updateEditingShop = (field, value) => {
+                setEditingShop(prev => ({ ...prev, [field]: value }));
+            };
+
+            const updateTask = (index, value) => {
+                const newTasks = [...editingShop.tasks];
+                newTasks[index] = value;
+                updateEditingShop('tasks', newTasks);
+            };
+
+            const addTaskField = () => {
+                updateEditingShop('tasks', [...editingShop.tasks, '']);
+            };
+
+            const removeTaskField = (index) => {
+                const newTasks = editingShop.tasks.filter((_, i) => i !== index);
+                updateEditingShop('tasks', newTasks);
+            };
+
+            // --- Handlers Tuyến đường ---
+            const startDrawing = () => {
+                setIsDrawingMode(true);
+                setCurrentRoutePoints([]);
+                setActiveTab('routes');
+            };
+            const undoLastPoint = () => setCurrentRoutePoints(prev => prev.slice(0, -1));
+            const cancelDrawing = () => { setIsDrawingMode(false); setCurrentRoutePoints([]); };
+            const finishDrawing = () => {
+                if (currentRoutePoints.length < 2) {
+                    setAlertMsg('Vui lòng vẽ ít nhất 2 điểm để tạo thành tuyến đường.');
+                    return;
+                }
+                setNewRouteName('');
+                setShowRouteNameModal(true);
+            };
+            const saveRoute = () => {
+                if (!newRouteName.trim()) { setAlertMsg('Vui lòng nhập tên tuyến đường.'); return; }
+                // Mặc định tuyến đường mới tạo sẽ hiển thị (visible: true)
+                setRoutes([...routes, { id: Date.now().toString(), name: newRouteName.trim(), points: currentRoutePoints, visible: true }]);
+                setShowRouteNameModal(false);
+                setIsDrawingMode(false);
+                setCurrentRoutePoints([]);
+            };
+            const confirmDeleteRoute = () => {
+                if (routeToDelete) { setRoutes(prev => prev.filter(r => r.id !== routeToDelete)); setRouteToDelete(null); }
+            };
+            const toggleRouteVisibility = (id) => {
+                setRoutes(prev => prev.map(r => r.id === id ? { ...r, visible: r.visible === false ? true : false } : r));
+            };
+
+            return (
+                <div class="flex flex-col md:flex-row w-full h-full">
+                    {/* Sidebar / Cột Quản lý */}
+                    <div class={`w-full md:w-[400px] bg-white flex flex-col shadow-xl z-10 transition-all ${(pickingLocation || isDrawingMode) ? 'pointer-events-none opacity-50' : ''}`}>
+                        {/* Header */}
+                        <div class="bg-blue-600 text-white p-4 flex justify-between items-center shrink-0">
+                            <h1 class="font-bold text-lg flex items-center gap-2">
+                                <IconMapPin />
+                                Quản Lý Khu Vực
+                            </h1>
+                        </div>
+
+                        {/* Tabs */}
+                        <div class="flex border-b border-gray-200 shrink-0 bg-gray-50">
+                            <button onClick={() => setActiveTab('shops')} class={`flex-1 py-3 text-sm font-bold transition-colors ${activeTab === 'shops' ? 'text-blue-700 border-b-2 border-blue-600 bg-white' : 'text-gray-500 hover:text-gray-700'}`}>Nhà Phân Phối</button>
+                            <button onClick={() => setActiveTab('routes')} class={`flex-1 py-3 text-sm font-bold transition-colors flex justify-center items-center gap-2 ${activeTab === 'routes' ? 'text-blue-700 border-b-2 border-blue-600 bg-white' : 'text-gray-500 hover:text-gray-700'}`}>
+                                <IconRoute /> Tuyến Đường
+                            </button>
+                        </div>
+
+                        {/* Vùng hiển thị Form hoặc Danh sách */}
+                        <div class="flex-1 overflow-y-auto p-4">
+                            {activeTab === 'shops' ? (
+                                editingShop ? (
+                                    /* --- FORM CHỈNH SỬA / THÊM MỚI --- */
+                                    <div class="bg-blue-50 rounded-lg p-4 border border-blue-100 shadow-inner">
+                                        <h2 class="font-bold text-blue-800 mb-4 pb-2 border-b border-blue-200">
+                                            {isAddingNew ? 'Thêm Địa Điểm Mới' : 'Sửa Thông Tin'}
+                                        </h2>
+                                        
+                                        <div class="space-y-4">
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-1">Tên cửa hàng/đại lý</label>
+                                                <input type="text" value={editingShop.name} onChange={(e) => updateEditingShop('name', e.target.value)} class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" placeholder="VD: Đại lý Ninh Kiều..." />
+                                            </div>
+                                            <div class="bg-white p-3 rounded border border-gray-200">
+                                                <div class="flex justify-between items-center mb-2">
+                                                    <label class="block text-sm font-medium text-gray-700">Vị trí (Tọa độ)</label>
+                                                    <button onClick={() => setPickingLocation(true)} class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded flex items-center gap-1 hover:bg-indigo-200 pointer-events-auto"><IconTarget /> Chọn trên bản đồ</button>
+                                                </div>
+                                                <div class="flex gap-2">
+                                                    <input type="number" step="any" value={editingShop.lat} onChange={(e) => updateEditingShop('lat', e.target.value)} class="w-1/2 p-2 border border-gray-300 rounded text-sm text-gray-600 outline-none focus:border-blue-500" placeholder="Vĩ độ (Lat)" />
+                                                    <input type="number" step="any" value={editingShop.lng} onChange={(e) => updateEditingShop('lng', e.target.value)} class="w-1/2 p-2 border border-gray-300 rounded text-sm text-gray-600 outline-none focus:border-blue-500" placeholder="Kinh độ (Lng)" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div class="flex justify-between items-center mb-1">
+                                                    <label class="block text-sm font-medium text-gray-700">Công việc cần làm tại đây</label>
+                                                    <button onClick={addTaskField} class="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1">+ Thêm việc</button>
+                                                </div>
+                                                <div class="space-y-2">
+                                                    {editingShop.tasks.map((task, index) => (
+                                                        <div key={index} class="flex gap-2">
+                                                            <input type="text" value={task} onChange={(e) => updateTask(index, e.target.value)} class="flex-1 p-2 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder={`Việc thứ ${index + 1}...`} />
+                                                            <button onClick={() => removeTaskField(index)} class="p-2 text-red-500 hover:bg-red-50 rounded border border-transparent hover:border-red-200 transition-colors" title="Xóa việc"><IconTrash /></button>
+                                                        </div>
+                                                    ))}
+                                                    {editingShop.tasks.length === 0 && <p class="text-sm text-gray-500 italic">Chưa có công việc nào. Bấm "+ Thêm việc" để tạo mới.</p>}
+                                                </div>
+                                            </div>
+                                            <div class="flex gap-3 pt-4 border-t border-blue-200 mt-4 pointer-events-auto">
+                                                <button onClick={handleSaveShop} class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded flex items-center justify-center gap-2 transition-colors"><IconCheck /> Lưu lại</button>
+                                                <button onClick={handleCancelEdit} class="flex-1 bg-white hover:bg-gray-100 text-gray-700 border border-gray-300 font-medium py-2 px-4 rounded flex items-center justify-center gap-2 transition-colors"><IconX /> Hủy</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    /* --- DANH SÁCH SHOP --- */
+                                    <div class="space-y-3">
+                                        <button onClick={handleAddClick} class="w-full bg-blue-50 border-2 border-dashed border-blue-300 text-blue-700 py-3 rounded-lg font-bold hover:bg-blue-100 flex justify-center items-center gap-2 mb-2"><IconPlus /> Thêm điểm phân phối mới</button>
+                                        {shops.length === 0 ? (
+                                            <div class="text-center py-10 text-gray-500">Chưa có dữ liệu nhà phân phối.</div>
+                                        ) : (
+                                            shops.map(shop => (
+                                                <div key={shop.id} onClick={() => handleEditShop(shop)} class="bg-white border border-gray-200 rounded-lg p-3 hover:border-blue-400 hover:shadow-md cursor-pointer transition-all group">
+                                                    <div class="flex justify-between items-start mb-2">
+                                                        <h3 class="font-bold text-gray-800 text-lg group-hover:text-blue-700">{shop.name}</h3>
+                                                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <button onClick={(e) => { e.stopPropagation(); handleEditShop(shop); }} class="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><IconEdit /></button>
+                                                            <button onClick={(e) => handleDeleteShop(shop.id, e)} class="p-1.5 text-red-600 hover:bg-red-50 rounded"><IconTrash /></button>
+                                                        </div>
+                                                    </div>
+                                                    <div class="text-xs text-gray-500 mb-2">📍 {shop.lat.toFixed(4)}, {shop.lng.toFixed(4)}</div>
+                                                    <div>
+                                                        <span class="text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-1 rounded inline-block mb-1">{shop.tasks.length} công việc</span>
+                                                        <ul class="text-sm text-gray-600 pl-4 list-disc space-y-0.5 line-clamp-3">
+                                                            {shop.tasks.map((task, i) => <li key={i}>{task}</li>)}
+                                                        </ul>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                )
+                            ) : (
+                                /* --- DANH SÁCH TUYẾN ĐƯỜNG --- */
+                                <div class="space-y-3">
+                                    <button onClick={startDrawing} class="w-full bg-indigo-50 border-2 border-dashed border-indigo-300 text-indigo-700 py-3 rounded-lg font-bold hover:bg-indigo-100 flex justify-center items-center gap-2 mb-2 transition-colors">
+                                        <IconRoute /> Vẽ tuyến đường mới
+                                    </button>
+                                    {routes.length === 0 ? (
+                                        <div class="text-center py-10 text-gray-500">Chưa có tuyến đường nào.<br/>Bấm nút bên trên để vẽ.</div>
+                                    ) : (
+                                        routes.map(route => {
+                                            const isVisible = route.visible !== false;
+                                            return (
+                                                <div key={route.id} class={`bg-white border ${isVisible ? 'border-gray-200 hover:border-indigo-400' : 'border-gray-100 opacity-60'} rounded-lg p-3 hover:shadow-md transition-all group flex justify-between items-center`}>
+                                                    <div>
+                                                        <h3 class={`font-bold text-base group-hover:text-indigo-700 ${isVisible ? 'text-gray-800' : 'text-gray-400 line-through'}`}>{route.name}</h3>
+                                                        <div class="text-xs text-gray-500 mt-1">📍 Bao gồm {route.points.length} điểm neo</div>
+                                                    </div>
+                                                    <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <button onClick={() => toggleRouteVisibility(route.id)} class="p-2 text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors" title={isVisible ? "Ẩn tuyến đường này" : "Hiện tuyến đường này"}>
+                                                            {isVisible ? <IconEye /> : <IconEyeOff />}
+                                                        </button>
+                                                        <button onClick={() => setRouteToDelete(route.id)} class="p-2 text-red-500 hover:bg-red-50 rounded-full transition-colors opacity-0 group-hover:opacity-100" title="Xóa tuyến đường">
+                                                            <IconTrash />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Vùng Bản đồ */}
+                    <div class="flex-1 relative w-full h-full bg-[#e5e7eb]">
+                        <div id="map-container" ref={mapRef} class="absolute inset-0 z-0" style={{ width: '100%', height: '100%' }}></div>
+                        
+                        {/* Overlay hướng dẫn khi chọn điểm trên bản đồ */}
+                        {pickingLocation && (
+                            <div class="absolute top-4 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-6 py-3 rounded-full shadow-lg font-medium flex items-center gap-3 z-50 animate-pulse cursor-crosshair pointer-events-none">
+                                <IconTarget />
+                                Hãy click vào một điểm trên bản đồ để cập nhật vị trí
+                            </div>
+                        )}
+                        
+                        {/* Cursor style for map when picking location */}
+                        {pickingLocation && (
+                            <style>{`#map-container { cursor: crosshair !important; }`}</style>
+                        )}
+                        
+                        {/* Overlay khi đang vẽ tuyến đường */}
+                        {isDrawingMode && (
+                            <div class="absolute top-4 left-1/2 -translate-x-1/2 bg-white p-2 rounded-xl shadow-2xl flex items-center gap-2 z-[2000] border border-indigo-100 pointer-events-auto">
+                                <div class="px-3 text-indigo-700 font-bold flex items-center gap-2 border-r border-gray-200">
+                                    <span class="relative flex h-3 w-3">
+                                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                      <span class="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
+                                    </span>
+                                    Chế độ vẽ tuyến
+                                </div>
+                                <div class="text-sm text-gray-500 px-2 flex items-center">
+                                    Đã chấm: <span class="font-bold text-indigo-600 ml-1">{currentRoutePoints.length} điểm</span>
+                                </div>
+                                <div class="flex gap-1 pl-2">
+                                    <button onClick={undoLastPoint} disabled={currentRoutePoints.length === 0} class="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 flex items-center gap-1 text-sm font-medium transition-colors">
+                                        <IconUndo /> Hoàn tác
+                                    </button>
+                                    <button onClick={cancelDrawing} class="px-3 py-2 bg-red-50 text-red-600 rounded hover:bg-red-100 flex items-center gap-1 text-sm font-medium transition-colors">
+                                        <IconX /> Hủy
+                                    </button>
+                                    <button onClick={finishDrawing} class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 flex items-center gap-1 text-sm font-medium shadow-sm transition-colors">
+                                        <IconCheck /> Hoàn tất
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Cursor style for map when drawing route */}
+                        {isDrawingMode && (
+                            <style>{`#map-container { cursor: crosshair !important; } .leaflet-interactive { cursor: crosshair !important; }`}</style>
+                        )}
+                    </div>
+
+                    {/* Custom Confirm Modal Xóa */}
+                    {shopToDelete && (
+                        <div class="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center">
+                            <div class="bg-white p-6 rounded-lg shadow-xl w-[350px] max-w-[90%]">
+                                <h3 class="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
+                                    <IconTrash /> Xác nhận xóa
+                                </h3>
+                                <p class="text-gray-600 mb-6 text-sm">Bạn có chắc chắn muốn xóa điểm phân phối này không?</p>
+                                <div class="flex justify-end gap-3">
+                                    <button onClick={() => setShopToDelete(null)} class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded text-sm font-medium transition-colors">Hủy</button>
+                                    <button onClick={confirmDelete} class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium transition-colors">Xóa điểm</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Custom Confirm Modal Xóa Tuyến Đường */}
+                    {routeToDelete && (
+                        <div class="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center">
+                            <div class="bg-white p-6 rounded-lg shadow-xl w-[350px] max-w-[90%]">
+                                <h3 class="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
+                                    <IconTrash /> Xóa tuyến đường
+                                </h3>
+                                <p class="text-gray-600 mb-6 text-sm">Bạn có chắc chắn muốn xóa tuyến đường này? Hành động này không thể hoàn tác.</p>
+                                <div class="flex justify-end gap-3">
+                                    <button onClick={() => setRouteToDelete(null)} class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded text-sm font-medium transition-colors">Hủy</button>
+                                    <button onClick={confirmDeleteRoute} class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium transition-colors">Xóa tuyến</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Custom Modal Nhập Tên Tuyến Đường */}
+                    {showRouteNameModal && (
+                        <div class="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center">
+                            <div class="bg-white p-6 rounded-lg shadow-xl w-[400px] max-w-[90%]">
+                                <h3 class="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                                    <IconRoute /> Lưu tuyến đường
+                                </h3>
+                                <div class="mb-5">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Tên tuyến đường</label>
+                                    <input 
+                                        type="text" 
+                                        autoFocus
+                                        value={newRouteName} 
+                                        onChange={(e) => setNewRouteName(e.target.value)} 
+                                        placeholder="VD: Tuyến Hậu Giang thứ 3..." 
+                                        class="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" 
+                                        onKeyDown={(e) => e.key === 'Enter' && saveRoute()}
+                                    />
+                                </div>
+                                <div class="flex justify-end gap-3">
+                                    <button onClick={() => setShowRouteNameModal(false)} class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded text-sm font-medium transition-colors">Hủy</button>
+                                    <button onClick={saveRoute} class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm font-medium transition-colors">Lưu lại</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Custom Alert Modal */}
+                    {alertMsg && (
+                        <div class="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center">
+                            <div class="bg-white p-5 rounded-lg shadow-xl w-[300px] max-w-[90%] text-center">
+                                <div class="text-yellow-500 mb-3 flex justify-center">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                                </div>
+                                <h3 class="text-lg font-bold text-gray-900 mb-2">Thông báo</h3>
+                                <p class="text-gray-600 mb-5 text-sm">{alertMsg}</p>
+                                <button onClick={() => setAlertMsg('')} class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition-colors w-full">Đã hiểu</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
