@@ -37,13 +37,13 @@
             transform: translate(-50%, -100%);
             margin-top: -15px;
             pointer-events: auto;
-            transition: all 0.2s ease;
+            transition: all 0.3s ease;
             cursor: pointer;
             z-index: 1000;
         }
         .marker-card:hover {
             transform: translate(-50%, -100%) scale(1.05);
-            z-index: 2000;
+            z-index: 2000 !important;
             border-color: #2563eb; 
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
         }
@@ -58,6 +58,7 @@
             border-color: #3b82f6 transparent transparent transparent;
             display: block;
             width: 0;
+            transition: all 0.3s ease;
         }
         .marker-card:hover::after {
             border-color: #2563eb transparent transparent transparent;
@@ -73,6 +74,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            transition: all 0.3s ease;
         }
         .marker-tasks-list {
             list-style-type: disc;
@@ -94,6 +96,39 @@
             transform: translateX(-50%);
             box-shadow: 0 0 6px rgba(0,0,0,0.5);
             z-index: 999;
+        }
+
+        /* --- CSS riêng cho trạng thái Zoom Out (Nhìn từ xa) --- */
+        .marker-card.zoomed-out {
+            background-color: transparent; /* Bỏ nền */
+            backdrop-filter: none;
+            border-color: transparent; /* Bỏ viền */
+            padding: 0;
+            box-shadow: none;
+        }
+        .marker-card.zoomed-out .marker-title {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+            /* Không chỉnh font-size để giữ nguyên kích thước mặc định */
+            /* Thêm viền trắng mờ quanh chữ để dễ đọc trên nền bản đồ nhiều chi tiết */
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.9), -1px -1px 2px rgba(255,255,255,0.9), 1px -1px 2px rgba(255,255,255,0.9), -1px 1px 2px rgba(255,255,255,0.9);
+        }
+        .marker-card.zoomed-out::after {
+            display: none; /* Ẩn mũi tên trỏ xuống vì không còn khung */
+        }
+        /* Khi hover vào marker, nó hiện lại khung như bình thường để dễ nhìn */
+        .marker-card.zoomed-out:hover {
+            background-color: rgba(255, 255, 255, 0.95);
+            border-color: #2563eb;
+            padding: 10px; /* Trả lại padding khi hiện nền */
+        }
+        .marker-card.zoomed-out:hover .marker-title {
+            text-shadow: none; /* Bỏ viền chữ khi đã có nền trắng */
+        }
+        .marker-card.zoomed-out:hover::after {
+            display: block; /* Hiện lại mũi tên */
+            border-color: #2563eb transparent transparent transparent;
         }
         
         /* Ẩn controls mặc định của Leaflet cho gọn */
@@ -164,6 +199,9 @@
             const [shopToDelete, setShopToDelete] = useState(null);
             const [alertMsg, setAlertMsg] = useState('');
             
+            // Trạng thái theo dõi Zoom của bản đồ (Mặc định là 10 lúc khởi tạo)
+            const [zoomLevel, setZoomLevel] = useState(10);
+            
             const [activeTab, setActiveTab] = useState('shops');
             const [routes, setRoutes] = useState(() => {
                 try {
@@ -196,7 +234,7 @@
                 }
 
                 try {
-                    // Zoom vào giữa Cần Thơ & Hậu Giang
+                    // Zoom vào giữa Cần Thơ & Hậu Giang (zoom mức 10)
                     const map = L.map(mapRef.current, { zoomControl: false }).setView([9.92, 105.65], 10);
                     mapInstance.current = map;
                     
@@ -212,8 +250,14 @@
                     markersLayerRef.current = L.layerGroup().addTo(map);
                     routesLayerRef.current = L.layerGroup().addTo(map);
 
+                    // Bắt sự kiện click
                     map.on('click', (e) => {
                         window.dispatchEvent(new CustomEvent('mapClicked', { detail: e.latlng }));
+                    });
+
+                    // Lắng nghe sự thay đổi mức Zoom để cập nhật state
+                    map.on('zoomend', () => {
+                        setZoomLevel(map.getZoom());
                     });
 
                     // Khắc phục triệt để lỗi "xám màn hình" do render sai kích thước
@@ -260,11 +304,14 @@
                 return () => window.removeEventListener('mapClicked', handleMapClick);
             }, [pickingLocation, editingShop, isDrawingMode]);
 
-            // Draw Markers
+            // Draw Markers (Re-renders on shop update OR zoom level changes)
             useEffect(() => {
                 if (!mapInstance.current || !markersLayerRef.current) return;
                 const layerGroup = markersLayerRef.current;
                 layerGroup.clearLayers(); 
+
+                // Ngưỡng zoom: Nếu zoom level < 11 (tức là đang nhìn toàn cảnh rộng), thì báo hiệu là Zoomed Out
+                const isZoomedOut = zoomLevel < 11; 
 
                 shops.forEach(shop => {
                     if (!shop.lat || !shop.lng) return;
@@ -273,12 +320,19 @@
                     const lngNum = Number(shop.lng);
                     if (isNaN(latNum) || isNaN(lngNum)) return;
 
-                    const tasksHtml = shop.tasks.length > 0 
-                        ? `<ul class="marker-tasks-list">${shop.tasks.map(t => `<li>${t}</li>`).join('')}</ul>`
-                        : `<span class="text-xs text-gray-400 italic block mt-1">Chưa có công việc</span>`;
+                    let tasksHtml = '';
+                    // Chỉ render chi tiết công việc nếu không bị zoom out
+                    if (!isZoomedOut) {
+                        tasksHtml = shop.tasks.length > 0 
+                            ? `<ul class="marker-tasks-list">${shop.tasks.map(t => `<li>${t}</li>`).join('')}</ul>`
+                            : `<span class="text-xs text-gray-400 italic block mt-1">Chưa có công việc</span>`;
+                    }
+
+                    // Tùy chỉnh class dựa trên mức zoom
+                    const cardClass = isZoomedOut ? 'marker-card zoomed-out' : 'marker-card';
 
                     const htmlContent = `
-                        <div class="marker-card">
+                        <div class="${cardClass}">
                             <div class="marker-title">${shop.name}</div>
                             ${tasksHtml}
                         </div>
@@ -290,11 +344,12 @@
                     
                     marker.on('click', () => {
                         handleEditShop(shop);
+                        // Khi click vào, bản đồ tự động bay tới điểm đó với mức zoom 14 (rất gần) -> tự động hiện task
                         mapInstance.current.flyTo([latNum, lngNum], 14, { duration: 0.5 });
                     });
                     layerGroup.addLayer(marker);
                 });
-            }, [shops]);
+            }, [shops, zoomLevel]); // Thêm zoomLevel vào Dependency array
 
             // Draw Routes
             useEffect(() => {
